@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Producto Detector</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1 class="title">Detector de Productos</h1>
+        <div class="button-container">
+            <button id="startCamera" class="button">Activar Cámara</button>
+        </div>
+        <div class="grid">
+            <div class="video-container">
+                <video id="video" class="video" autoplay muted></video>
+                <canvas id="canvas" class="canvas" width="128" height="128"></canvas>
+            </div>
+            <div id="result" class="result">
+                <h1 id="waiting" class="waiting">Esperando detección de producto...</h1>
+                <h1 id="noObject" class="noObject" style="display: none;">No se está detectando objeto en la cámara.</h1>
+                <h1 id="predictedClass" class="predictedClass"></h1>
+                <h1 id="historyText" class="historyText"></h1>
+                <img id="historyImage" class="historyImage" src="" alt="Imagen del producto" style="display: none;"/>
+            </div>
+        </div>
+    </div>
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const startCameraButton = document.getElementById('startCamera');
+        const waitingText = document.getElementById('waiting');
+        const noObjectText = document.getElementById('noObject');
+        const predictedClassText = document.getElementById('predictedClass');
+        const historyText = document.getElementById('historyText');
+        const historyImage = document.getElementById('historyImage');
+
+        startCameraButton.addEventListener('click', async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+                video.srcObject = stream;
+                video.style.display = 'block';
+                startCameraButton.style.display = 'none';
+                detectProduct();
+            } catch (err) {
+                console.error('Error accessing camera:', err);
+            }
+        });
+
+        async function detectProduct() {
+            const context = canvas.getContext('2d');
+            context.drawImage(video, 0, 0, 128, 128);
+            const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+            const edges = detectEdges(imageData);
+
+            if (edges < 100) {  // Ajusta este valor según sea necesario
+                noObjectText.style.display = 'block';
+                predictedClassText.innerText = '';
+                historyText.innerText = '';
+                historyImage.style.display = 'none';
+                waitingText.style.display = 'none';
+                setTimeout(detectProduct, 1000); // Llama a detectProduct cada segundo
+                return;
+            } else {
+                noObjectText.style.display = 'none';
+            }
+
+            const dataURL = canvas.toDataURL('image/jpeg');
+            const blob = await (await fetch(dataURL)).blob();
+            const formData = new FormData();
+            formData.append('image', blob, 'image.jpg');
+
+            try {
+                const response = await fetch('/predict', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+                if (data.predicted_class && data.predicted_class !== "Fondo") {
+                    predictedClassText.innerText = data.predicted_class;
+                    waitingText.style.display = 'none';
+                    historyText.innerText = data.history_text || '';
+                    if (data.image) {
+                        historyImage.src = 'data:image/jpeg;base64,' + data.image;
+                        historyImage.style.display = 'block';
+                    } else {
+                        historyImage.style.display = 'none';
+                    }
+                } else {
+                    predictedClassText.innerText = '';
+                    historyText.innerText = '';
+                    historyImage.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Error sending image to server:', error);
+            }
+
+            setTimeout(detectProduct, 1000); // Llama a detectProduct cada segundo
+        }
+
+        function detectEdges(imageData) {
+            let edgeCount = 0;
+            const threshold = 20;
+            for (let y = 1; y < imageData.height - 1; y++) {
+                for (let x = 1; x < imageData.width - 1; x++) {
+                    const idx = (y * imageData.width + x) * 4;
+                    const r = imageData.data[idx];
+                    const g = imageData.data[idx + 1];
+                    const b = imageData.data[idx + 2];
+                    const avg = (r + g + b) / 3;
+
+                    const idxRight = ((y * imageData.width) + (x + 1)) * 4;
+                    const rRight = imageData.data[idxRight];
+                    const gRight = imageData.data[idxRight + 1];
+                    const bRight = imageData.data[idxRight + 2];
+                    const avgRight = (rRight + gRight + bRight) / 3;
+
+                    if (Math.abs(avg - avgRight) > threshold) {
+                        edgeCount++;
+                    }
+                }
+            }
+            return edgeCount;
+        }
+    </script>
+</body>
+</html>
